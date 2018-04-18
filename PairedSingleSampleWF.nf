@@ -25,13 +25,10 @@ Developed based on GATK's best practise, takes set of FASTQ files and performs:
  - variant evaluation (SnpEff)
 */
 
-// Package version
-version = '0.8.1'
-
 // Help message
 helpMessage = """
 ===============================================================================
-NGI-ExoSeq : Exome/Targeted sequence capture best practice analysis v${version}
+NGI-ExoSeq : Exome/Targeted sequence capture best practice analysis v${params.version}
 ===============================================================================
 
 Usage: nextflow SciLifeLab/NGI-ExoSeq --reads '*_R{1,2}.fastq.gz' --genome GRCh37
@@ -66,7 +63,7 @@ Other options:
 --project                      Uppnex project to user for SLURM executor
 
 For more detailed information regarding the parameters and usage refer to package
-documentation at https:// github.com/scilifelab/NGI-ExoSeq
+documentation at https://github.com/scilifelab/NGI-ExoSeq
 """
 
 // Variables and defaults
@@ -184,15 +181,13 @@ log.info summary.collect { k,v -> "${k.padRight(15)}: $v" }.join("\n")
 log.info "========================================="
 
 
-// Nextflow version check
-nf_required_version = '0.25.0'
 try {
-    if( ! workflow.nextflow.version.matches(">= $nf_required_version") ){
+    if( ! workflow.nextflow.version.matches(">= $params.nf_required_version") ){
         throw GroovyException('Nextflow version too old')
         }
 } catch (all) {
     log.error "====================================================\n" +
-              "  Nextflow version $nf_required_version required! You are running v$workflow.nextflow.version.\n" +
+              "  Nextflow version $params.nf_required_version required! You are running v$workflow.nextflow.version.\n" +
               "  Pipeline execution will continue, but things may break.\n" +
               "  Please run `nextflow self-update` to update Nextflow.\n" +
               "============================================================"
@@ -331,7 +326,6 @@ process bwamem {
     bwa mem \\
     -R $rg \\
     -t ${task.cpus} \\
-    -k 2 \\
     $params.gfasta \\
     $reads \\
     > ${name}_bwa.sam
@@ -359,12 +353,12 @@ process sortSam {
 
 
     script:
-    def avail_mem = task.memory ? "-m ${task.memory.toBytes().intdiv(task.cpus)}" : ''
+    def avail_mem = task.memory ? "-m ${task.memory.toMega().intdiv(task.cpus)}" : ''
     """
     samtools sort \\
         $raw_sam \\
         -@ ${task.cpus}\\
-        $avail_mem \\
+        ${avail_mem}M \\
         -o ${raw_sam}.sorted.bam
     # Print version number to standard out
     echo "Samtools V:"\$(samtools 2>&1)
@@ -391,12 +385,14 @@ process markDuplicates {
 
     script:
     """
-        gatk MarkDuplicates \\
+        mkdir `pwd`/tmp
+        gatk-launch MarkDuplicates \\
         --INPUT $sorted_bam \\
         --OUTPUT ${name}_markdup.bam \\
         --METRICS_FILE ${name}.dup_metrics \\
         --REMOVE_DUPLICATES false \\
         --CREATE_INDEX true \\
+        --TMP_DIR=`pwd`/tmp \\
         --java-options -Xmx${task.memory.toGiga()}g
     """
 }
@@ -424,7 +420,7 @@ process recal_bam_files {
     script:
     if(params.exome){
     """
-    gatk BaseRecalibrator \\
+    gatk-launch BaseRecalibrator \\
         -R $params.gfasta \\
         -I $markdup_bam \\
         -O ${name}_table.recal \\
@@ -437,7 +433,7 @@ process recal_bam_files {
     """
     } else {
     """
-    gatk BaseRecalibrator \\
+    gatk-launch BaseRecalibrator \\
         -R $params.gfasta \\
         -I $markdup_bam \\
         -O ${name}_table.recal \\
@@ -464,7 +460,7 @@ process applyBQSR {
     script:
     if(params.exome){
     """
-    gatk ApplyBQSR \\
+    gatk-launch ApplyBQSR \\
         -R $params.gfasta \\
         -I $markdup_bam \\
         --bqsr-recal-file ${name}_table.recal \\
@@ -475,7 +471,7 @@ process applyBQSR {
     """
     } else {
     """
-    gatk ApplyBQSR \\
+    gatk-launch ApplyBQSR \\
         -R $params.gfasta \\
         -I $markdup_bam \\
         --bqsr-recal-file ${name}_table.recal \\
@@ -540,7 +536,7 @@ process variantCall {
     script:
     if(params.exome){
     """
-    gatk HaplotypeCaller \\
+    gatk-launch HaplotypeCaller \\
         -I $realign_bam \\
         -R $params.gfasta \\
         -O ${name}_variants.vcf \\
@@ -559,7 +555,7 @@ process variantCall {
     """
     } else { //We have a winner (genome)
     """
-    gatk HaplotypeCaller \\
+    gatk-launch HaplotypeCaller \\
         -I $realign_bam \\
         -R $params.gfasta \\
         -O ${name}_variants.vcf \\
@@ -650,7 +646,7 @@ process GenerateMultiQCconfig {
   echo "- _R1" >> multiqc_config.yaml
   echo "- _R2" >> multiqc_config.yaml
   echo "report_header_info:" >> multiqc_config.yaml
-  echo "- Exoseq version: ${version}" >> multiqc_config.yaml
+  echo "- Exoseq version: ${params.version}" >> multiqc_config.yaml
   echo "- Command Line: ${workflow.commandLine}" >> multiqc_config.yaml
   echo "- Directory: ${workflow.launchDir}" >> multiqc_config.yaml
   echo "- Genome: "${params.gfasta} >> multiqc_config.yaml
@@ -710,7 +706,7 @@ process multiqc {
 
 def exoMessage() {
   // Display NGI-ExoSeq message
-  log.info "NGI-ExoSeq ANALYSIS WORKFLOW ~ ${version} - " + this.grabRevision() + (workflow.commitId ? " [${workflow.commitId}]" : "")
+  log.info "NGI-ExoSeq ANALYSIS WORKFLOW ~ ${params.version} - " + this.grabRevision() + (workflow.commitId ? " [${workflow.commitId}]" : "")
 }
 
 def grabRevision() {
